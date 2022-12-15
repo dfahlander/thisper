@@ -69,6 +69,7 @@ export type ContextualConfig = {
 export const Contextual: ContextualConstructor = function (
   config: ContextualConfig
 ) {
+  if (new.target) return; // Invoked with new. Do nothing.
   const ContextualWithConfig =
     function () {} as unknown as ContextualConstructor;
   ContextualWithConfig.deps = config.deps && Object.freeze(config.deps);

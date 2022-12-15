@@ -21,6 +21,7 @@
   "license": "Apache-2.0",
   "devDependencies": {
     "@rollup/plugin-terser": "^0.2.0",
+    "@rollup/plugin-typescript": "^10.0.1",
     "jest": "^29.3.1",
     "just-build": "^0.9.24",
     "rollup": "^3.7.4",
