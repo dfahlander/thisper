@@ -1,5 +1,3 @@
 node_modules
-*.js
-*.map
-*.gz
-*.d.ts
+build
+dist
