@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "type": "module",
+  "types": "./dist/thisper.d.ts",
   "exports": "./dist/thisper.js",
   "scripts": {
     "test": "jest",
