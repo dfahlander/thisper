@@ -10,7 +10,9 @@ export default {
     sourcemap: true
   },
   plugins: [
-    typescript()
+    typescript({
+      outDir: 'dist'
+    })
     //ts(),
     /*terser({
       ecma: 2020,

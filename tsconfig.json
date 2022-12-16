@@ -6,6 +6,8 @@
     "alwaysStrict": true,
     "declaration": true,
     "sourceMap": true,
-    "outDir": "dist"
-  }
+    "outDir": "build",
+    "types": ["jest"]
+  },
+  "files": ["src/thisper.ts"]
 }
