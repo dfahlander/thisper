@@ -1,12 +1,23 @@
+export const InjectedTypeSymbol = Symbol();
+export type InjectedType<T> = T extends (new () => infer R) | Function
+  ? R extends { [InjectedTypeSymbol]: new () => infer IT }
+    ? IT
+    : R
+  : never;
 type Class<T = any> = new (...args: any[]) => T;
 type ClassOrConstructable<T = any> = Class<T> & {
   construct?: (di: DI, args: any[]) => T;
 };
-export const InjectedTypeSymbol = Symbol();
+type InjectFn = <C extends ClassOrConstructable>(Class: C) => InjectedType<C>;
+type NewFn = <C extends ClassOrConstructable>(
+  Class: C,
+  ...args: ConstructorParameters<C>
+) => InstanceType<C>;
+
 export const MiddlewareForSymbol = Symbol();
 
 interface CallableThis {
-  <T>(type: T): InjectedType<T>;
+  <C extends (new () => any) | Function>(type: C): InjectedType<C>;
 }
 
 declare class CallableThis {
@@ -81,15 +92,14 @@ export const This: ThisConstructor = function (options: ThisOptions) {
     "construct" in options
       ? options.construct
       : "stateful" in options && options.stateful
-      ? function (di, args) {
+      ? function ({inject}: DI, args) {
           // Construct the instance so it behaves exactly as new:ed but also
           // being able to call as a function:
           // NOTE: 'this' is the Class here:
           const Class = this;
           const obj = new Class(...args) as any;
-          Object.defineProperty(obj, 'new', {value: di._new.bind(di, di)}); // Optimizes the prototype-based version a bit.
           const redirectHandler: ProxyHandler<any> = {
-            apply: (inject, thiz, args) => Reflect.apply(inject, di, args),
+            apply: (inject, thiz, args) => inject(...args),
             get: (target, prop, receiver) => Reflect.get(obj, prop, receiver),
             set: (target, prop, value, receiver) =>
               Reflect.set(obj, prop, value, receiver),
@@ -101,7 +111,7 @@ export const This: ThisConstructor = function (options: ThisOptions) {
             }
           }
           return new Proxy(
-            di.inject, // No need to bind it because apply handler binds it for us.
+            inject,
             redirectHandler
           );
         }
@@ -109,23 +119,18 @@ export const This: ThisConstructor = function (options: ThisOptions) {
   return ThisWithOptions;
 } as unknown as ThisConstructor;
 
-This.construct = function (di) {
+This.construct = function ({createInject}) {
   // Default stateless services
-  const f = di.inject.bind(di);
+  const f = createInject();
   Object.setPrototypeOf(f, this.prototype);
   f.constructor = this;
-  Object.defineProperty(f, 'new', {value: di._new.bind(di, di)}); // Optimizes the prototype-based version a bit.
   return f;
 };
 
-export type InjectedType<T> = T extends (new () => infer R) | Function
-  ? R extends { [InjectedTypeSymbol]: new () => infer IT }
-    ? IT
-    : R
-  : never;
-
 /** Middleware */
-export type DIMiddleware = (next: DI) => Partial<Pick<DI, "_map" | "_inject">>;
+export type DIMiddleware = (
+  next: DI
+) => Partial<Pick<DI, "_map" | "_getInstance">>;
 
 /** DI provider.
  *
@@ -138,23 +143,23 @@ export type DIProvider = Class<any> | object | DIMiddleware;
 
 export interface DI {
   /** Creates an instance of a class (like new()) */
-  _new<C extends ClassOrConstructable>(
-    di: DI,
-    Class: C,
-    ...args: ConstructorParameters<C>
-  ): InstanceType<C>;
+  _new: NewFn;
 
   _map<C extends ClassOrConstructable>(Class: C): C;
 
   /** Injects a singleton class instance. */
-  _inject<C extends ClassOrConstructable>(di: DI, Class: C): InjectedType<C>;
+  _inject: InjectFn;
 
-  run<T>(fn: (this: CallableThis) => T): T;
+  createInject: () => InjectFn & {new: NewFn};
+
+  _getInstance: (Class: Class) => InstanceType<Class> | null;
 
   /** Injects a singleton class instance and memoizes the result. Calls _inject internally. */
-  inject<C extends ClassOrConstructable>(this: DI, Class: C): InjectedType<C>;
+  inject: InjectFn & { new: NewFn };
 
-  map<C extends ClassOrConstructable>(this: DI, Class: C): C;
+  map<C extends ClassOrConstructable>(Class: C): C;
+
+  run<T>(fn: (this: CallableThis) => T): T;
 
   /** Creates a new DI environment that derives current but adds given providers */
   DI(...args: DIProvider[]): DI;
@@ -172,14 +177,14 @@ function getBackingInstance<T>(i: WithMiddlewareFor<T>) {
 
 const depInjectCache: InjectMap = new WeakMap<Class, object | InjectMap>();
 function findDependentInjection<C extends Class & { deps: Class[] }>(
-  di: DI, // TODO: change to inject
+  inject: InjectFn,
   Class: C
 ): [InstanceType<C>, object[]] {
   const { deps } = Class;
   let i = 0,
     l = deps.length;
   let x = depInjectCache.get(Class);
-  const depInstances = deps.map((dep) => getBackingInstance(di.inject(dep)));
+  const depInstances = deps.map((dep) => getBackingInstance(inject(dep)));
   while (x && x instanceof WeakMap) {
     if (i >= l) throw Error("INTERNAL: Deps inconsistency!");
     x = x.get(depInstances[i++]);
@@ -207,53 +212,83 @@ function storeDependentInjection(
 
 let circProtect: WeakSet<any> | undefined | null;
 
-function createDI(overrides: Partial<DI>): DI {
+function createDI({ _map, _getInstance }: Partial<DI>): DI {
   const injectCache = new WeakMap<Class | Function, object>();
   const mapCache = new WeakMap<Class, Class>();
 
+  if (!_map) _map = (Class) => Class;
+  if (!_getInstance) _getInstance = (Class) => null;
+
+  let inject: InjectFn & { new: NewFn };
+  let di: DI;
+
+  const _new = <C extends ClassOrConstructable>(
+    Class: C,
+    ...args: ConstructorParameters<C>
+  ) => {
+    const MappedClass = map(Class);
+    return MappedClass.construct
+      ? MappedClass.construct(di, args)
+      : new MappedClass(...args);
+  };
+
+  const _inject = <C extends ClassOrConstructable>(GivenClass: C) => {
+    const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
+    const customInstance = _getInstance(Class);
+    if (customInstance !== null) return customInstance;
+    if ((Class as ThisConstructor).deps) {
+      if (circProtect.has(Class)) throw Error(`Circular deps in ${Class.name}`);
+      circProtect.add(Class);
+      try {
+        let [instance, depInstances] = findDependentInjection(
+          inject,
+          Class as any
+        );
+        if (!instance) {
+          instance = _new(Class);
+          storeDependentInjection(Class, instance, depInstances);
+        }
+        return instance;
+      } finally {
+        circProtect.delete(Class);
+      }
+    }
+    return _new(Class) as InjectedType<C>;
+  };
+
   // Having map inline is for optimization - allows JS engine to inline it within _inject and _new
-  function map<C extends ClassOrConstructable>(di: DI, Class: C): C {
+  function map<C extends ClassOrConstructable>(Class: C): C {
     let Mapped = mapCache.get(Class);
     if (Mapped !== undefined) return Mapped as C;
-    Mapped = di._map(Class);
+    Mapped = _map(Class);
     mapCache.set(Class, Mapped);
     return Mapped as C;
   }
 
-  const rv: DI = {
+  const createInject = () => {
+    const rv = function inject<C extends ClassOrConstructable>(Class: C) {
+      let instance = injectCache.get(Class) as InjectedType<C>;
+      if (instance !== undefined) return instance;
+      instance = _inject(Class);
+      injectCache.set(Class, instance);
+      return instance;
+    };
+    rv.new = _new;
+    return rv as InjectFn & { new: NewFn };
+  };
 
-    _map(Class) {
-      return Class;
-    },
+  inject = createInject();
 
-    _inject<C extends ClassOrConstructable>(di: DI, GivenClass: C) {
-      const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
-      if ((Class as ThisConstructor).deps) {
-        if (circProtect.has(Class))
-          throw Error(`Circular deps in ${Class.name}`);
-        circProtect.add(Class);
-        try {
-          let [instance, depInstances] = findDependentInjection(
-            di,
-            Class as any
-          );
-          if (!instance) {
-            instance = di._new(di, Class);
-            storeDependentInjection(Class, instance, depInstances);
-          }
-          return instance;
-        } finally {
-          circProtect.delete(Class);
-        }
-      }
-      return di._new(di, Class) as InjectedType<C>;
-    },
+  di = {
+    _map,
+    _getInstance,
 
-    // Let only _map and _inject be overridable.
-    // inject, _new and map are hard bound to closure-based WeakMaps and must
-    // not be overridable.
-    // run() and DI() are not meant to be overridable (see no purpose for now).
-    ...overrides,
+    _inject,
+    _new,
+    createInject,
+
+    inject,
+    map,
 
     run<T>(this: DI, fn: (this: CallableThis) => T) {
       if (typeof fn !== "function" || !(fn instanceof Function))
@@ -262,10 +297,11 @@ function createDI(overrides: Partial<DI>): DI {
       if (!fn.prototype)
         throw new TypeError("Argument to DI.run() must not be arrow function.");
 
-      return fn.apply(this.inject.bind(this));
+      return fn.apply(inject);
     },
+
     DI(this: DI, ...providers: DIProvider[]): DI {
-      return providers.reduce<DI>((next, provider) => {
+      return providers.reduce<DI>((prev: DI, provider) => {
         if (provider instanceof Function) {
           // Class or function
           if (
@@ -277,16 +313,15 @@ function createDI(overrides: Partial<DI>): DI {
             // When anyone wants to inject any of its superclasses,
             // give them this class!
             return createDI({
-              ...next,
               _map<C extends ClassOrConstructable>(Class: C): C {
                 return provider === Class || provider.prototype instanceof Class
                   ? (provider as C)
-                  : next._map(Class);
-              }
+                  : prev._map(Class);
+              },
             });
           } else {
             // Arrow function or function (= Middleware)
-            return createDI({...next, ...(provider as DIMiddleware)(next)});
+            return createDI({ ...prev, ...(provider as DIMiddleware)(prev) });
           }
         } else if (
           typeof provider === "object" ||
@@ -294,11 +329,9 @@ function createDI(overrides: Partial<DI>): DI {
         ) {
           // Instance
           return createDI({
-            ...next,
-            _inject(di: DI, Class: ClassOrConstructable) {
-              return provider instanceof Class
-                ? provider
-                : next._inject(di, Class);
+            ...prev,
+            _getInstance(Class: ClassOrConstructable) {
+              return provider instanceof Class ? provider : null;
             },
           });
         } else {
@@ -306,29 +339,10 @@ function createDI(overrides: Partial<DI>): DI {
         }
       }, this);
     },
-
-    inject<C extends ClassOrConstructable>(this: DI, Class: C) {
-      let instance = injectCache.get(Class) as InjectedType<C>;
-      if (instance !== undefined) return instance;
-      instance = this._inject(this, Class);
-      injectCache.set(Class, instance);
-      return instance;
-    },
-
-    _new(di, Class, ...args) {
-      const MappedClass = map(di, Class);
-      return MappedClass.construct
-        ? MappedClass.construct(di, args)
-        : new MappedClass(...args);
-    },
-
-    map(Class) {
-      return map(this, Class);
-    },
   };
   // Always let this(DI) return the current DI:
-  injectCache.set(DI, rv);
-  return rv;
+  injectCache.set(DI, di);
+  return di;
 }
 
 export const DI = function (...providers: DIProvider[]) {
@@ -338,12 +352,3 @@ export const DI = function (...providers: DIProvider[]) {
 const defaultDI = createDI({});
 const _DI = defaultDI.DI;
 Object.assign(DI, defaultDI);
-
-Object.defineProperties(This.prototype, {
-  new: {
-    value(Class: Class, ...args: any[]) {
-      const di = this(DI);
-      return di._new(di, Class, ...args);
-    },
-  },
-});
