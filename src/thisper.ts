@@ -234,8 +234,11 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
 
   const _inject = <C extends ClassOrConstructable>(GivenClass: C) => {
     const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
-    const customInstance = _getInstance(Class);
-    if (customInstance !== null) return customInstance;
+    let instance = _getInstance(Class);
+    if (instance !== null) {
+      injectCache.set(Class, instance);
+      return instance;
+    }
     if ((Class as ThisConstructor).deps) {
       if (circProtect.has(Class)) throw Error(`Circular deps in ${Class.name}`);
       circProtect.add(Class);
@@ -248,12 +251,15 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
           instance = _new(Class);
           storeDependentInjection(Class, instance, depInstances);
         }
+        injectCache.set(Class, instance);
         return instance;
       } finally {
         circProtect.delete(Class);
       }
     }
-    return _new(Class) as InjectedType<C>;
+    instance = _new(Class) as InjectedType<C>;
+    injectCache.set(Class, instance);
+    return instance;
   };
 
   // Having map inline is for optimization - allows JS engine to inline it within _inject and _new
@@ -269,9 +275,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
     const rv = function inject<C extends ClassOrConstructable>(Class: C) {
       let instance = injectCache.get(Class) as InjectedType<C>;
       if (instance !== undefined) return instance;
-      instance = _inject(Class);
-      injectCache.set(Class, instance);
-      return instance;
+      return _inject(Class);
     };
     rv.new = _new;
     return rv as InjectFn & { new: NewFn };
