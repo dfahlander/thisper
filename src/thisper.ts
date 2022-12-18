@@ -213,12 +213,6 @@ function storeDependentInjection(
 let circProtect: WeakSet<any> | undefined | null;
 
 function createDI({ _map, _getInstance }: Partial<DI>): DI {
-  const diID = Symbol("DI");
-  const finalizer = typeof FinalizationRegistry !== 'undefined' && new FinalizationRegistry((typeSet: Set<Class>) => {
-    for (const T of typeSet) {
-      delete T[diID];
-    }
-  });
   const injectCache = new WeakMap<Class | Function, object>();
   const mapCache = new WeakMap<Class, Class>();
 
@@ -242,11 +236,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
     const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
     let instance = _getInstance(Class);
     if (instance !== null) {
-      if (finalizer) {
-        Class[diID] = new WeakRef(instance);
-      } else {
-        injectCache.set(Class, instance);
-      }
+      injectCache.set(Class, instance);
       return instance;
     }
     if ((Class as ThisConstructor).deps) {
@@ -261,22 +251,14 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
           instance = _new(Class);
           storeDependentInjection(Class, instance, depInstances);
         }
-        if (finalizer) {
-          Class[diID] = new WeakRef(instance);
-        } else {
-          injectCache.set(Class, instance);
-        }
+        injectCache.set(Class, instance);
         return instance;
       } finally {
         circProtect.delete(Class);
       }
     }
     instance = _new(Class) as InjectedType<C>;
-    if (finalizer) {
-      Class[diID] = new WeakRef(instance);
-    } else {
-      injectCache.set(Class, instance);
-    }
+    injectCache.set(Class, instance);
     return instance;
   };
 
@@ -290,12 +272,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
   }
 
   const createInject = () => {
-    const rv: InjectFn & {new?: NewFn } = finalizer ? function inject<C extends ClassOrConstructable>(Class: C): InjectedType<C> {
-      let instance = Class[diID] as WeakRef<InjectedType<Class>>;
-      if (instance !== undefined) return instance.deref();
-      return _inject(Class);
-    }
-    : function inject<C extends ClassOrConstructable>(Class: C): InjectedType<C> {
+    const rv = function inject<C extends ClassOrConstructable>(Class: C) {
       let instance = injectCache.get(Class) as InjectedType<C>;
       if (instance !== undefined) return instance;
       return _inject(Class);
@@ -367,13 +344,8 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
       }, this);
     },
   };
-  if (finalizer) {
-    DI[diID] = new WeakRef(di);
-    finalizer.register(di, new Set<Class>([DI]));
-  } else {
-    // Always let this(DI) return the current DI:
-    injectCache.set(DI, di);
-  }
+  // Always let this(DI) return the current DI:
+  injectCache.set(DI, di);
   return di;
 }
 
