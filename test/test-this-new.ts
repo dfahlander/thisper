@@ -1,13 +1,13 @@
-import { DI, This } from "../src/thisper";
+import { DI, Service } from "../src/thisper";
 
 
-class Service extends This {
+class Svc extends Service {
   foo(names: string[]) {
     return names.map(name => this.new(Item, name).withExclamations);
   }
 }
 
-class Item extends This({stateful: true}) {
+class Item extends Service({stateful: true}) {
   name: string;
   constructor(name: string) {
     super();
@@ -33,10 +33,10 @@ class QuestionMark extends Exclamation {
 test ("try creating contextual class via new", ()=>{
   //expect(()=>new Service().foo()).toThrow();
   DI(QuestionMark).run(function(){
-    const result = this(Service).foo(["David", "Ylva"]);
+    const result = this(Svc).foo(["David", "Ylva"]);
     expect(result).toEqual(["David?", "Ylva?"]);
     this(DI).DI(Exclamation).run(function(){
-      const result = this(Service).foo(["David", "Ylva"]);
+      const result = this(Svc).foo(["David", "Ylva"]);
       expect(result).toEqual(["David!", "Ylva!"]);
     });
   });

@@ -62,11 +62,11 @@ declare class PublicCallableThis extends _CallableThis {
   ): InstanceType<C>;
 }
 
-export type ThisConstructor = typeof CallableThis & {
-  <O extends ThisOptions>(options: O): O extends {stateful: true} ? typeof PublicCallableThis : typeof CallableThis ;
+export type ServiceConstructor = typeof CallableThis & {
+  (options: ServiceOptions): typeof CallableThis ;
 };
 
-export type ThisOptions = {
+export type ServiceOptions = {
   /** For stateful services, define which other services this depends on.
    * An injected service singleton instance will be the same as long as all the
    * dependent services are the same.
@@ -97,13 +97,13 @@ export type ThisOptions = {
   construct?: (di: DI, args: any[]) => any;
 };
 
-export const This: ThisConstructor = function (options: ThisOptions) {
+export const Service: ServiceConstructor = function (options: ServiceOptions) {
   if (new.target) return; // Invoked with new. Do nothing.
-  const ThisWithOptions = function () {} as unknown as ThisConstructor;
-  ThisWithOptions.deps = options.deps && Object.freeze(options.deps);
-  ThisWithOptions.prototype = Object.create(This.prototype);
+  const ServiceWithOptions = function () {} as unknown as ServiceConstructor;
+  ServiceWithOptions.deps = options.deps && Object.freeze(options.deps);
+  ServiceWithOptions.prototype = Object.create(Service.prototype);
   //Object.setPrototypeOf(ContextualWithConfig, Contextual); // Not really needed actually. No static props needs to be inherited.
-  ThisWithOptions.construct =
+  ServiceWithOptions.construct =
     "construct" in options
       ? options.construct
       : "stateful" in options && options.stateful
@@ -130,11 +130,11 @@ export const This: ThisConstructor = function (options: ThisOptions) {
             redirectHandler
           );
         }
-      : This.construct;
-  return ThisWithOptions;
-} as unknown as ThisConstructor;
+      : Service.construct;
+  return ServiceWithOptions;
+} as unknown as ServiceConstructor;
 
-This.construct = function ({createInject}) {
+Service.construct = function ({createInject}) {
   // Default stateless services
   const f = createInject();
   Object.setPrototypeOf(f, this.prototype);
@@ -254,7 +254,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
       injectCache.set(Class, instance);
       return instance;
     }
-    if ((Class as ThisConstructor).deps) {
+    if ((Class as ServiceConstructor).deps) {
       if (circProtect.has(Class)) throw Error(`Circular deps in ${Class.name}`);
       circProtect.add(Class);
       try {
