@@ -16,16 +16,11 @@ type NewFn = <C extends ClassOrConstructable>(
 
 export const MiddlewareForSymbol = Symbol();
 
-interface CallableThis {
+interface _CallableThis {
   <C extends (new () => any) | Function>(type: C): InjectedType<C>;
 }
 
-declare class CallableThis {
-  protected constructor();
-  protected new<C extends Class>(
-    Class: C,
-    ...args: ConstructorParameters<C>
-  ): InstanceType<C>;
+declare class _CallableThis {
   static construct: (di: DI, args: any[]) => any;
   static deps?: readonly Class[];
   private apply: any;
@@ -47,8 +42,28 @@ declare class CallableThis {
   private [Symbol.hasInstance]: any;
 }
 
+declare class CallableThis extends _CallableThis {
+  /** This class in maintained by ***thisper*** and cannot be constructed via **new**().
+   * Either create a new instance of it using **this.new**(*Type*, ...args), or if it
+   * represents a singleton service, inject it using **this**(*Type*) or
+   * DI(...providers).inject(*Type*).
+   */
+  protected constructor();
+  protected new<C extends Class>(
+    Class: C,
+    ...args: ConstructorParameters<C>
+  ): InstanceType<C>;
+}
+
+declare class PublicCallableThis extends _CallableThis {
+  "new"<C extends Class>(
+    Class: C,
+    ...args: ConstructorParameters<C>
+  ): InstanceType<C>;
+}
+
 export type ThisConstructor = typeof CallableThis & {
-  (options: ThisOptions): ThisConstructor;
+  <O extends ThisOptions>(options: O): O extends {stateful: true} ? typeof PublicCallableThis : typeof CallableThis ;
 };
 
 export type ThisOptions = {
@@ -159,7 +174,7 @@ export interface DI {
 
   map<C extends ClassOrConstructable>(Class: C): C;
 
-  run<T>(fn: (this: CallableThis) => T): T;
+  run<T>(fn: (this: PublicCallableThis) => T): T;
 
   /** Creates a new DI environment that derives current but adds given providers */
   DI(...args: DIProvider[]): DI;
@@ -294,7 +309,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
     inject,
     map,
 
-    run<T>(this: DI, fn: (this: CallableThis) => T) {
+    run<T>(this: DI, fn: (this: PublicCallableThis) => T) {
       if (typeof fn !== "function" || !(fn instanceof Function))
         throw new TypeError("Argument to DI.run() must be a function.");
 
