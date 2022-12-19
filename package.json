@@ -1,10 +1,11 @@
 {
   "name": "thisper",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "",
   "type": "module",
-  "types": "./dist/thisper.d.ts",
+  "main": "./dist/thisper.js",
   "exports": "./dist/thisper.js",
+  "types": "./dist/thisper.d.ts",
   "scripts": {
     "test": "jest",
     "test:debug": "npx --node-options=--inspect jest --runInBand",
