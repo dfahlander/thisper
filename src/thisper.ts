@@ -4,9 +4,16 @@ export type InjectedType<T> = T extends (new () => infer R) | Function
     ? IT
     : R
   : never;
-type _InstanceType<T> = T extends (new (...args: any[]) => infer R) | Function ? R : never;
-type _ConstructorParameters<T> = T extends (new (...args: infer A) => any) | Function ? A : never;
+type _InstanceType<T> = T extends (new (...args: any[]) => infer R) | Function
+  ? R
+  : never;
+type _ConstructorParameters<T> = T extends
+  | (new (...args: infer A) => any)
+  | Function
+  ? A
+  : never;
 type Class<T = any> = new (...args: any[]) => T;
+type AbstractClass<T = any> = (new (...args: any[]) => T) | Function;
 type ClassOrConstructable<T = any> = Class<T> & {
   construct?: (di: DI, args: any[]) => T;
 };
@@ -16,7 +23,7 @@ type NewFn = <C extends ClassOrConstructable>(
   ...args: ConstructorParameters<C>
 ) => InstanceType<C>;
 
-export const MiddlewareForSymbol = Symbol();
+export const IsProxyFor = Symbol();
 
 interface CallableThis {
   <C extends (new () => any) | Function>(type: C): InjectedType<C>;
@@ -31,7 +38,7 @@ declare class CallableThis {
    * DI(...providers).inject(*Type*).
    */
   protected constructor();
-  protected new<C extends (new(...args: any[])=>any) | Function>(
+  protected new<C extends (new (...args: any[]) => any) | Function>(
     Class: C,
     ...args: _ConstructorParameters<C>
   ): _InstanceType<C>;
@@ -55,14 +62,14 @@ declare class CallableThis {
 }
 
 declare class RunContext extends CallableThis {
-  public new<C extends (new(...args: any[])=>any) | Function>(
+  public new<C extends (new (...args: any[]) => any) | Function>(
     Class: C,
     ...args: _ConstructorParameters<C>
   ): _InstanceType<C>;
 }
 
 export type ServiceConstructor = typeof CallableThis & {
-  (options: ServiceOptions): typeof CallableThis ;
+  (options: ServiceOptions): typeof CallableThis;
 };
 
 export type ServiceOptions = {
@@ -106,7 +113,7 @@ export const Service: ServiceConstructor = function (options: ServiceOptions) {
     "construct" in options
       ? options.construct
       : "stateful" in options && options.stateful
-      ? function ({inject}: DI, args) {
+      ? function ({ inject }: DI, args) {
           // Construct the instance so it behaves exactly as new:ed but also
           // being able to call as a function:
           // NOTE: 'this' is the Class here:
@@ -124,16 +131,13 @@ export const Service: ServiceConstructor = function (options: ServiceOptions) {
                 Reflect[prop](obj, ...args);
             }
           }
-          return new Proxy(
-            inject,
-            redirectHandler
-          );
+          return new Proxy(inject, redirectHandler);
         }
       : Service.construct;
   return ServiceWithOptions;
 } as unknown as ServiceConstructor;
 
-Service.construct = function ({createInject}) {
+Service.construct = function ({ createInject }) {
   // Default stateless services
   const f = createInject();
   Object.setPrototypeOf(f, this.prototype);
@@ -142,9 +146,7 @@ Service.construct = function ({createInject}) {
 };
 
 /** Middleware */
-export type DIMiddleware = (
-  next: DI
-) => Partial<Pick<DI, "_map" | "_getInstance">>;
+export type DIMiddleware = (next: ProviderHooks) => ProviderHooks;
 
 /** DI provider.
  *
@@ -155,18 +157,84 @@ export type DIMiddleware = (
  */
 export type DIProvider = Class<any> | object | DIMiddleware;
 
+/*
+  Koncept:
+  1. Service - En klass som kan använda this() för att invokera andra services.
+  2. Provider - En som mappar en klass till en annan, eller en klass till en instans.
+  3. Context - En immutable samling providers med gränssnitt för att invokera eller skapa instanser.
+  4. invoke - Att hämta en singleton instans av viss typ
+  5. new - Att skapa en ny instans av viss typ
+  6. Middleware - En funktion som tar en samling hooks och returnerar en ny samling hooks.
+  7. Proxy ett lager mellan en instans och dess caller
+*/
+
+export interface ProviderHooks {
+  /** Map a super class to a more concrete sub class.
+   *
+   * The function will be called when injecting singleton
+   * services (by calling this(SuperClass)) and make it return an
+   * instance of the mapped class instead of the super class (which is
+   * the default).
+   *
+   * The function will also be called when constructing instances
+   * (by calling this.new(SuperClass, ...args) and instanciate the mapped
+   * constructor instead of SuperClass (which is the default behavior).
+   *
+   * A middleware should decide whether to map given class or not, for
+   * example by checking for the existance of certain properties or
+   * examining its inheritance chain using the *instanceof* operator
+   * on its *prototype* property.
+   *
+   * If the middleware decides not to change any default behavior, implementor
+   * should return previous hook's mapClass(Class).
+   *
+   * If the given class is returned, the middlware will reset to default behavior
+   * and override any behavior from previous middlewares.
+   *
+   * @param Class Requested class
+   * @returns A subclass of given Class, or given Class itself.
+   */
+  mapClass: <C extends AbstractClass>(Class: C) => C;
+
+  /** Map a certain class to a singleton instance that you provide.
+   *
+   * This function overrides the default behavior of injecting singleton
+   * instances (by calling this(Class)). Instead of letting the framework
+   * construct an instance of given class, the exact instance returned by this
+   * function will be returned.
+   *
+   * The implementor of this callback may populate properties on the instance
+   * or call a non-default constructor with configured values before returning
+   * it.
+   *
+   * This function will be called before *mapClass* is called.
+   *
+   * @param Class Requested class
+   * @returns An instance of given class
+   */
+  getInstance: <T extends object>(
+    Class: abstract new (...args: any[]) => T
+  ) => T | null;
+
+  /** Create a proxy in front of given instance.
+   *
+   * This function is called before returning any instance to the callers of
+   * *this(Class)* or *this.new(Class, ...args)*. The implementor may
+   * return a Proxy for the instance and inject custom behaviors on it.
+   * A middleware could for example return a Proxy that logs any property
+   * access. Middlware can decide whether to proxy all instances or just
+   * certain instances based on instance type (using the *instanceof* operator).
+   *
+   * @param instance Instance that is about to be returned.
+   * @returns An instance to return instead, such as a Proxy.
+   */
+  createProxy: <T extends object>(instance: T) => T;
+}
+
 export interface DI {
-  /** Creates an instance of a class (like new()) */
-  _new: NewFn;
+  hooks: ProviderHooks;
 
-  _map<C extends ClassOrConstructable>(Class: C): C;
-
-  /** Injects a singleton class instance. */
-  _inject: InjectFn;
-
-  createInject: () => InjectFn & {new: NewFn};
-
-  _getInstance: (Class: Class) => InstanceType<Class> | null;
+  createInject: () => InjectFn & { new: NewFn };
 
   /** Injects a singleton class instance and memoizes the result. Calls _inject internally. */
   inject: InjectFn & { new: NewFn };
@@ -179,16 +247,12 @@ export interface DI {
   DI(...args: DIProvider[]): DI;
 }
 
-type InjectMap = WeakMap<object, object | InjectMap>;
-
-type WithMiddlewareFor<T> = T & {
-  [MiddlewareForSymbol]?: WithMiddlewareFor<T>;
-};
-function getBackingInstance<T>(i: WithMiddlewareFor<T>) {
-  const backer = i[MiddlewareForSymbol];
+function getBackingInstance<T>(i: any) {
+  const backer = i[IsProxyFor];
   return backer ? getBackingInstance(backer) : i;
 }
 
+type InjectMap = WeakMap<object, object | InjectMap>;
 const depInjectCache: InjectMap = new WeakMap<Class, object | InjectMap>();
 function findDependentInjection<C extends Class & { deps: Class[] }>(
   inject: InjectFn,
@@ -221,17 +285,15 @@ function storeDependentInjection(
     key = depInstances[i];
     wm1 = wm2;
   }
-  wm1.set(key, instance);
+  wm1.set(key, getBackingInstance(instance));
 }
 
-let circProtect: WeakSet<any> | undefined | null;
+const circProtect = new WeakSet<any>();
 
-function createDI({ _map, _getInstance }: Partial<DI>): DI {
+function createDI(hooks: ProviderHooks): DI {
+  const { mapClass, getInstance, createProxy } = hooks;
   const injectCache = new WeakMap<Class | Function, object>();
   const mapCache = new WeakMap<Class, Class>();
-
-  if (!_map) _map = (Class) => Class;
-  if (!_getInstance) _getInstance = (Class) => null;
 
   let inject: InjectFn & { new: NewFn };
   let di: DI;
@@ -241,15 +303,16 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
     ...args: ConstructorParameters<C>
   ) => {
     const MappedClass = map(Class);
-    return MappedClass.construct
+    return createProxy(MappedClass.construct
       ? MappedClass.construct(di, args)
-      : new MappedClass(...args);
+      : new MappedClass(...args));
   };
 
   const _inject = <C extends ClassOrConstructable>(GivenClass: C) => {
     const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
-    let instance = _getInstance(Class);
+    let instance = getInstance(Class);
     if (instance !== null) {
+      instance = createProxy(instance);
       injectCache.set(Class, instance);
       return instance;
     }
@@ -280,7 +343,7 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
   function map<C extends ClassOrConstructable>(Class: C): C {
     let Mapped = mapCache.get(Class);
     if (Mapped !== undefined) return Mapped as C;
-    Mapped = _map(Class);
+    Mapped = mapClass(Class);
     mapCache.set(Class, Mapped);
     return Mapped as C;
   }
@@ -298,16 +361,10 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
   inject = createInject();
 
   di = {
-    _map,
-    _getInstance,
-
-    _inject,
-    _new,
+    hooks,
     createInject,
-
     inject,
     map,
-
     run<T>(this: DI, fn: (this: RunContext) => T) {
       if (typeof fn !== "function" || !(fn instanceof Function))
         throw new TypeError("Argument to DI.run() must be a function.");
@@ -317,9 +374,8 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
 
       return fn.apply(inject);
     },
-
     DI(this: DI, ...providers: DIProvider[]): DI {
-      return providers.reduce<DI>((prev: DI, provider) => {
+      return providers.reduce<DI>(({ hooks }: DI, provider) => {
         if (provider instanceof Function) {
           // Class or function
           if (
@@ -331,15 +387,16 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
             // When anyone wants to inject any of its superclasses,
             // give them this class!
             return createDI({
-              _map<C extends ClassOrConstructable>(Class: C): C {
-                return provider === Class || provider.prototype instanceof Class
-                  ? (provider as C)
-                  : prev._map(Class);
-              },
+              ...hooks,
+              mapClass: <C extends AbstractClass>(Class: C) =>
+                ((provider as any) === Class ||
+                provider.prototype instanceof Class
+                  ? provider
+                  : hooks.mapClass(Class)) as C,
             });
           } else {
             // Arrow function or function (= Middleware)
-            return createDI({ ...prev, ...(provider as DIMiddleware)(prev) });
+            return createDI({ ...hooks, ...(provider as DIMiddleware)(hooks) });
           }
         } else if (
           typeof provider === "object" ||
@@ -347,10 +404,9 @@ function createDI({ _map, _getInstance }: Partial<DI>): DI {
         ) {
           // Instance
           return createDI({
-            ...prev,
-            _getInstance(Class: ClassOrConstructable) {
-              return provider instanceof Class ? provider : null;
-            },
+            ...hooks,
+            getInstance: (Class) =>
+              provider instanceof Class ? provider : null,
           });
         } else {
           throw new TypeError("provider is neither class, function or object");
@@ -367,6 +423,10 @@ export const DI = function (...providers: DIProvider[]) {
   return _DI.apply(defaultDI, providers);
 } as DI & DI["DI"] & (new () => DI);
 
-const defaultDI = createDI({});
+const defaultDI = createDI({
+  createProxy: (x) => x,
+  getInstance: () => null,
+  mapClass: (C) => C,
+});
 const _DI = defaultDI.DI;
 Object.assign(DI, defaultDI);
