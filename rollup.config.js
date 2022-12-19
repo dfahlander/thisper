@@ -1,5 +1,5 @@
 //import ts from 'rollup-plugin-ts';
-import typescript from '@rollup/plugin-typescript';
+import typescript from '@rollup/plugin-typescript'
 //import terser from '@rollup/plugin-terser';
 
 export default {
@@ -7,12 +7,12 @@ export default {
   output: {
     dir: 'dist',
     format: 'es',
-    sourcemap: true
+    sourcemap: true,
   },
   plugins: [
     typescript({
-      outDir: 'dist'
-    })
+      outDir: 'dist',
+    }),
     //ts(),
     /*terser({
       ecma: 2020,
@@ -20,5 +20,5 @@ export default {
       sourceMap: true,
       compress: true
     })*/
-  ]
-};
+  ],
+}

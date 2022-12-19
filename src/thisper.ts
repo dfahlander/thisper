@@ -32,7 +32,9 @@ type _ConstructorParameters<T> = T extends
   ? A
   : never;
 type Class<T = any> = new (...args: any[]) => T;
-type AbstractClass<T = any> = ((new (...args: any[]) => T) | Function) & {construct?: (ctx: DIContext, args: any[])=>T};
+type AbstractClass<T = any> = ((new (...args: any[]) => T) | Function) & {
+  construct?: (ctx: DIContext, args: any[]) => T;
+};
 type ClassOrConstructable<T = any> = Class<T> & {
   construct?: (ctx: DIContext, args: any[]) => T;
 };
@@ -52,7 +54,7 @@ interface CallableThis {
 
 declare class CallableThis {
   static construct: (ctx: DIContext, args: any[]) => any;
-  static deps?: readonly Class[];
+  static deps?: readonly AbstractClass[];
   /** This class in maintained by ***thisper*** and cannot be constructed via **new**().
    * Either create a new instance of it using **this.new**(*Type*, ...args), or if it
    * represents a singleton service, inject it using **this**(*Type*) or
@@ -98,7 +100,7 @@ export type ServiceOptions = {
    * An injected service singleton instance will be the same as long as all the
    * dependent services are the same.
    */
-  deps?: Class[];
+  deps?: AbstractClass[];
 
   /** Stateful.
    *
@@ -131,9 +133,9 @@ export const Service: ServiceConstructor = function (options: ServiceOptions) {
   ServiceWithOptions.prototype = Object.create(Service.prototype);
   //Object.setPrototypeOf(ContextualWithConfig, Contextual); // Not really needed actually. No static props needs to be inherited.
   ServiceWithOptions.construct =
-    "construct" in options
+    'construct' in options
       ? options.construct
-      : "stateful" in options && options.stateful
+      : 'stateful' in options && options.stateful
       ? function ({ inject }: DIContext, args) {
           // Construct the instance so it behaves exactly as new:ed but also
           // being able to call as a function:
@@ -219,9 +221,7 @@ export interface ProviderHooks {
    * @param Class Requested class
    * @returns An instance of given class
    */
-  getInstance: <T extends object>(
-    Class: AbstractClass<T>
-  ) => T | null;
+  getInstance: <T extends object>(Class: AbstractClass<T>) => T | null;
 
   /** Create a proxy in front of given instance.
    *
@@ -246,7 +246,7 @@ export abstract class DIContext {
   /** Injects a singleton class instance and memoizes the result. Calls _inject internally. */
   abstract inject: InjectFn & { new: NewFn };
 
-  abstract "new": NewFn;
+  abstract new: NewFn;
 
   abstract map<C extends ClassOrConstructable>(Class: C): C;
 
@@ -273,7 +273,7 @@ function findDependentInjection<C extends Class & { deps: Class[] }>(
   let x = depInjectCache.get(Class);
   const depInstances = deps.map((dep) => getBackingInstance(inject(dep)));
   while (x && x instanceof WeakMap) {
-    if (i >= l) throw Error("INTERNAL: Deps inconsistency!");
+    if (i >= l) throw Error('INTERNAL: Deps inconsistency!');
     x = x.get(depInstances[i++]);
   }
   return [x as InstanceType<C>, depInstances];
@@ -312,12 +312,15 @@ function createDI(hooks: ProviderHooks): DIContext {
     ...args: _ConstructorParameters<C>
   ) => {
     const MappedClass = map(Class);
-    return createProxy(MappedClass.construct
-      ? MappedClass.construct(ctx, args)
-      : new (MappedClass as Class)(...args));
+    return createProxy(
+      MappedClass.construct
+        ? MappedClass.construct(ctx, args)
+        : new (MappedClass as Class)(...args)
+    );
   };
 
   const _inject = <C extends ClassOrConstructable>(GivenClass: C) => {
+    if (GivenClass?.name === 'Storage') debugger;
     const Class = GivenClass.prototype[InjectedTypeSymbol] ?? GivenClass;
     let instance = getInstance(Class);
     if (instance !== null) {
@@ -376,11 +379,11 @@ function createDI(hooks: ProviderHooks): DIContext {
     map,
     new: _new,
     run<T>(this: DIContext, fn: (this: RunContext) => T) {
-      if (typeof fn !== "function" || !(fn instanceof Function))
-        throw new TypeError("Argument to DI.run() must be a function.");
+      if (typeof fn !== 'function' || !(fn instanceof Function))
+        throw new TypeError('Argument to DI.run() must be a function.');
 
       if (!fn.prototype)
-        throw new TypeError("Argument to DI.run() must not be arrow function.");
+        throw new TypeError('Argument to DI.run() must not be arrow function.');
 
       return fn.apply(inject);
     },
@@ -391,7 +394,7 @@ function createDI(hooks: ProviderHooks): DIContext {
           if (
             Object.getPrototypeOf(provider) !== Function.prototype ||
             (provider.prototype &&
-              !Object.getOwnPropertyDescriptor(provider, "prototype").writable)
+              !Object.getOwnPropertyDescriptor(provider, 'prototype').writable)
           ) {
             // A subclass or base class
             // When anyone wants to inject any of its superclasses,
@@ -406,20 +409,26 @@ function createDI(hooks: ProviderHooks): DIContext {
             });
           } else {
             // Arrow function or function (= Middleware)
-            return createDI({ ...hooks, ...(provider as ProviderMiddleware)(hooks) });
+            return createDI({
+              ...hooks,
+              ...(provider as ProviderMiddleware)(hooks),
+            });
           }
         } else if (
-          typeof provider === "object" ||
-          typeof provider === "function"
+          typeof provider === 'object' ||
+          typeof provider === 'function'
         ) {
           // Instance
+          console.log('Provider instance is a ', provider.constructor.name);
           return createDI({
             ...hooks,
             getInstance: <T>(Class: AbstractClass<T>) =>
-              provider instanceof Class ? provider as T : null,
+              provider instanceof Class
+                ? (provider as T)
+                : hooks.getInstance(Class as AbstractClass<any>),
           });
         } else {
-          throw new TypeError("provider is neither class, function or object");
+          throw new TypeError('provider is neither class, function or object');
         }
       }, this);
     },
@@ -429,9 +438,9 @@ function createDI(hooks: ProviderHooks): DIContext {
   return ctx;
 }
 
-export const DI = function (...providers: DIProvider[]) {
+export let DI = function (...providers: DIProvider[]) {
   return _DI.apply(defaultDIContext, providers);
-} as DIContext & DIContext["provide"];
+} as DIContext & DIContext['provide'];
 
 const defaultDIContext = createDI({
   createProxy: (x) => x,
