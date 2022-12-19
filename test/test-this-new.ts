@@ -1,4 +1,4 @@
-import { DI, Service } from "../src/thisper";
+import { DI, DIContext, Service } from "../src/thisper";
 
 
 class Svc extends Service {
@@ -35,10 +35,17 @@ test ("try creating contextual class via new", ()=>{
   DI(QuestionMark).run(function(){
     const result = this(Svc).foo(["David", "Ylva"]);
     expect(result).toEqual(["David?", "Ylva?"]);
-    this(DI).DI(Exclamation).run(function(){
+    this(DIContext).provide(Exclamation).run(function(){
       const result = this(Svc).foo(["David", "Ylva"]);
       expect(result).toEqual(["David!", "Ylva!"]);
     });
+    {
+      let result = this(DIContext).provide(Exclamation).inject(Svc).foo(["Hej"]);
+      expect(result).toEqual(["Hej!"]);
+      result = this(DIContext).provide(QuestionMark).inject(Svc).foo(["Hej"]);
+      expect(result).toEqual(["Hej?"]);
+    }
+
   });
   
 });
